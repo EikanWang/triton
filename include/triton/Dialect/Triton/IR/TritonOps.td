@@ -351,11 +351,17 @@ def TT_TransOp : TT_Op<"trans", [Pure,
 // SPMD Ops
 //
 def TT_GetProgramIdOp : TT_Op<"get_program_id", [Pure]> {
-    let arguments = (ins I32Attr:$axis);
+    let arguments = (ins TT_ProgramDim:$axis);
 
     let results = (outs I32:$result);
 
-    let assemblyFormat = "attr-dict `:` type($result)";
+    let assemblyFormat = "$axis attr-dict `:` type($result)";
+
+    let extraClassDeclaration = [{
+      int32_t getAxisAsInt() {
+        return static_cast<int32_t>(getAxis());
+      }
+    }];
 }
 
 def TT_GetNumProgramsOp : TT_Op<"get_num_programs", [Pure]> {
@@ -479,7 +485,7 @@ def TT_PrintOp : TT_Op<"print", [MemoryEffects<[MemWrite]>]>,
     format are generated automatically from the arguments.
   }];
   let assemblyFormat = [{
-    $prefix attr-dict `:` ($args^ `:` type($args))?
+    $prefix attr-dict (`:` $args^ `:` type($args))?
   }];
 }
 
@@ -600,6 +606,11 @@ def CallOp : TT_Op<"call", [CallOpInterface, /*MemRefsNormalizable, */DeclareOpI
     /// Return the callee of this operation.
     CallInterfaceCallable getCallableForCallee() {
       return (*this)->getAttrOfType<SymbolRefAttr>("callee");
+    }
+
+    /// Set the callee for this operation.
+    void setCalleeFromCallable(CallInterfaceCallable callee) {
+      (*this)->setAttr("callee", callee.get<SymbolRefAttr>());
     }
   }];
 

@@ -39,6 +39,10 @@ public:
 
   unsigned getIntraWarpSize();
 
+  unsigned getInterWarpSizeWithUniqueData();
+
+  unsigned getIntraWarpSizeWithUniqueData();
+
   unsigned getThreadsReductionAxis();
 
   SmallVector<unsigned> getScratchConfigBasic();
@@ -56,8 +60,6 @@ private:
   SmallVector<Type> srcElementTypes;
   int axis;
 };
-
-bool isSharedEncoding(Value value);
 
 bool maybeSharedAllocationOp(Operation *op);
 

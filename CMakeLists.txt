@@ -22,6 +22,7 @@ endif()
 # Options
 option(TRITON_BUILD_TUTORIALS "Build C++ Triton tutorials" ON)
 option(TRITON_BUILD_PYTHON_MODULE "Build Python Triton bindings" OFF)
+set(TRITON_CODEGEN_BACKENDS "" CACHE STRING "Enable different codegen backends")
 
 # Ensure Python3 vars are set correctly
 # used conditionally in this file and by lit tests
@@ -45,12 +46,6 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 # Third-party
 include_directories(${PYBIND11_INCLUDE_DIR})
-
-if(WIN32)
-  SET(BUILD_SHARED_LIBS OFF)
-  find_package(dlfcn-win32 REQUIRED)
-  set(CMAKE_DL_LIBS dlfcn-win32::dl)
-endif()
 
 set(CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS} -D__STDC_FORMAT_MACROS  -fPIC -std=gnu++17 -fvisibility=hidden -fvisibility-inlines-hidden")
 
@@ -221,6 +216,7 @@ if(TRITON_BUILD_PYTHON_MODULE)
     ${conversion_libs}
 
     # optimizations
+    MLIRBytecodeWriter
     MLIRPass
     MLIRTransforms
     MLIRLLVMDialect
@@ -266,6 +262,14 @@ if(TRITON_BUILD_PYTHON_MODULE AND NOT WIN32)
   endif()
 
   target_link_libraries(triton ${CUTLASS_LIBRARIES} ${PYTHON_LDFLAGS})
+endif()
+
+if (NOT "X${TRITON_CODEGEN_BACKENDS}" STREQUAL "X")
+  set(PYTHON_THIRD_PARTY_PATH ${CMAKE_CURRENT_SOURCE_DIR}/python/triton/third_party)
+  foreach(CODEGEN_BACKEND ${TRITON_CODEGEN_BACKENDS})
+    string(TOLOWER ${CODEGEN_BACKEND} lower_codegen_backend)
+    add_subdirectory(third_party/${lower_codegen_backend})
+  endforeach()
 endif()
 
 add_subdirectory(test)

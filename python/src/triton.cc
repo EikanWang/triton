@@ -3,6 +3,8 @@
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/Verifier.h"
 
+#include "mlir/Bytecode/BytecodeWriter.h"
+
 #include "mlir/Conversion/Passes.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
@@ -262,6 +264,11 @@ void init_triton_ir(py::module &&m) {
              return !self.empty() &&
                     self.back().hasTrait<mlir::OpTrait::IsTerminator>();
            })
+      .def("has_return",
+           [](mlir::Block &self) {
+             return !self.empty() &&
+                    self.back().hasTrait<mlir::OpTrait::ReturnLike>();
+           })
       .def("erase", [](mlir::Block &self) { self.erase(); });
 
   // using eattr = ir::attribute_kind_t;
@@ -342,6 +349,14 @@ void init_triton_ir(py::module &&m) {
              llvm::raw_string_ostream os(str);
              self.print(os);
              return str;
+           })
+      .def("bytecode",
+           [](mlir::ModuleOp &self) -> py::bytearray {
+             std::string bytecode;
+             llvm::raw_string_ostream os(bytecode);
+             if (failed(mlir::writeBytecodeToFile(self, os)))
+               throw std::runtime_error("Failed to write module bytecode");
+             return py::bytearray(bytecode);
            })
       .def("push_back",
            [](mlir::ModuleOp &self, mlir::triton::FuncOp &funcOp) -> void {
@@ -428,6 +443,29 @@ void init_triton_ir(py::module &&m) {
             self.setArgAttr(arg_no, name, mlir::IntegerAttr::get(attrTy, val));
           },
           ret::reference)
+      .def("finalize",
+           [](mlir::triton::FuncOp &self) -> void {
+             // Remove dead code
+             // 1. Unreachable code after return
+             self.walk([&](mlir::Block *block) {
+               mlir::Operation *retOp = nullptr;
+               // It's better to not use walk here because we only want to
+               // check operations in the current block
+               for (auto &op : block->getOperations()) {
+                 if (mlir::isa<mlir::triton::ReturnOp>(op))
+                   if (retOp == nullptr) {
+                     retOp = &op;
+                     break;
+                   }
+               }
+               if (retOp && retOp != &block->back()) {
+                 auto pos = retOp->getIterator();
+                 pos++;
+                 auto *newBlock = block->splitBlock(pos);
+                 newBlock->erase();
+               }
+             });
+           })
       .def_property_readonly("type", &mlir::triton::FuncOp::getFunctionType)
       .def("reset_type", &mlir::triton::FuncOp::setType);
 
@@ -1287,8 +1325,12 @@ void init_triton_ir(py::module &&m) {
       .def("create_get_program_id",
            [](mlir::OpBuilder &self, int axis) -> mlir::Value {
              auto loc = self.getUnknownLoc();
+             if (axis < 0 || axis > 3)
+               throw std::runtime_error("program_id must be in [0,3]");
              return self.create<mlir::triton::GetProgramIdOp>(
-                 loc, self.getI32Type(), self.getI32IntegerAttr(axis));
+                 loc, self.getI32Type(),
+                 mlir::triton::ProgramIDDimAttr::get(
+                     loc.getContext(), mlir::triton::ProgramIDDim(axis)));
            })
       .def("create_get_num_programs",
            [](mlir::OpBuilder &self, int axis) -> mlir::Value {
@@ -1490,11 +1532,13 @@ void init_triton_ir(py::module &&m) {
              self.addPass(mlir::triton::createRewriteTensorPointerPass(
                  computeCapability));
            })
-      .def("add_convert_triton_to_tritongpu_pass",
-           [](mlir::PassManager &self, int numWarps) {
-             self.addPass(
-                 mlir::triton::createConvertTritonToTritonGPUPass(numWarps));
-           })
+      .def(
+          "add_convert_triton_to_tritongpu_pass",
+          [](mlir::PassManager &self, int numWarps, int threadsPerWarp) {
+            self.addPass(mlir::triton::createConvertTritonToTritonGPUPass(
+                numWarps, threadsPerWarp));
+          },
+          py::arg("numWarps") = 4, py::arg("threadsPerWarp") = 32)
       .def("add_tritongpu_pipeline_pass",
            [](mlir::PassManager &self, int numStages) {
              self.addPass(mlir::createTritonGPUPipelinePass(numStages));

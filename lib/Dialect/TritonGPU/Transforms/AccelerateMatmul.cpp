@@ -44,20 +44,17 @@ SmallVector<int64_t, 2> mmaVersionToShapePerWarp(int version) {
 SmallVector<unsigned, 2> warpsPerTileV2(triton::DotOp dotOp,
                                         const ArrayRef<int64_t> shape,
                                         int numWarps) {
-  SetVector<Operation *> slices;
-  mlir::getForwardSlice(dotOp.getResult(), &slices);
-  if (llvm::find_if(slices, [](Operation *op) {
-        return isa<triton::DotOp>(op);
-      }) != slices.end())
-    return {(unsigned)numWarps, 1};
+  auto filter = [&dotOp](Operation *op) {
+    return op->getParentRegion() == dotOp->getParentRegion();
+  };
+  auto slices = mlir::getSlice(dotOp, filter);
+  for (Operation *op : slices)
+    if (isa<triton::DotOp>(op) && (op != dotOp))
+      return {(unsigned)numWarps, 1};
 
   SmallVector<unsigned, 2> ret = {1, 1};
   SmallVector<int64_t, 2> shapePerWarp = {16, 8};
   bool changed = false;
-  // TODO (@daadaada): double-check.
-  // original logic in
-  // https://github.com/openai/triton/blob/master/lib/codegen/analysis/layout.cc#L252
-  // seems buggy for shape = [32, 16] ?
   do {
     changed = false;
     if (ret[0] * ret[1] >= numWarps)

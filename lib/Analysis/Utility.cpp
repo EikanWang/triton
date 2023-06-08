@@ -17,11 +17,24 @@ unsigned ReduceOpHelper::getInterWarpSize() {
   auto srcReduceDimSize = static_cast<unsigned>(srcShape[axis]);
   unsigned sizeIntraWarps = getIntraWarpSize();
   return std::min(srcReduceDimSize / sizeIntraWarps,
+                  triton::gpu::getWarpsPerCTA(getSrcLayout())[axis]);
+}
+
+unsigned ReduceOpHelper::getIntraWarpSize() {
+  auto srcReduceDimSize = static_cast<unsigned>(srcShape[axis]);
+  return std::min(srcReduceDimSize,
+                  triton::gpu::getThreadsPerWarp(getSrcLayout())[axis]);
+}
+
+unsigned ReduceOpHelper::getInterWarpSizeWithUniqueData() {
+  auto srcReduceDimSize = static_cast<unsigned>(srcShape[axis]);
+  unsigned sizeIntraWarps = getIntraWarpSizeWithUniqueData();
+  return std::min(srcReduceDimSize / sizeIntraWarps,
                   triton::gpu::getWarpsPerCTAWithUniqueData(
                       getSrcLayout(), getSrcShape())[axis]);
 }
 
-unsigned ReduceOpHelper::getIntraWarpSize() {
+unsigned ReduceOpHelper::getIntraWarpSizeWithUniqueData() {
   auto srcReduceDimSize = static_cast<unsigned>(srcShape[axis]);
   return std::min(srcReduceDimSize,
                   triton::gpu::getThreadsPerWarpWithUniqueData(
@@ -59,7 +72,9 @@ SmallVector<SmallVector<unsigned>> ReduceOpHelper::getScratchConfigsFast() {
   /// shared memory block1:
   auto mod = op->getParentOfType<ModuleOp>();
   unsigned numWarps = triton::gpu::TritonGPUDialect::getNumWarps(mod);
-  smemShapes[1].push_back(numWarps * 32);
+  unsigned threadsPerWarp =
+      triton::gpu::TritonGPUDialect::getThreadsPerWarp(mod);
+  smemShapes[1].push_back(numWarps * threadsPerWarp);
 
   return smemShapes;
 }
@@ -94,15 +109,6 @@ bool ReduceOpHelper::isSupportedLayout() {
   }
   if (auto sliceLayout = srcLayout.dyn_cast<triton::gpu::SliceEncodingAttr>()) {
     return true;
-  }
-  return false;
-}
-
-bool isSharedEncoding(Value value) {
-  auto type = value.getType();
-  if (auto tensorType = type.dyn_cast<RankedTensorType>()) {
-    auto encoding = tensorType.getEncoding();
-    return encoding && encoding.isa<triton::gpu::SharedEncodingAttr>();
   }
   return false;
 }

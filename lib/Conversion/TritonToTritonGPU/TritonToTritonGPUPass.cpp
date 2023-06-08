@@ -67,19 +67,21 @@ public:
   matchAndRewrite(arith::ConstantOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     Type retType = getTypeConverter()->convertType(op.getType());
+    auto retShapedType = retType.cast<ShapedType>();
     auto value = adaptor.getValue().dyn_cast<DenseElementsAttr>();
-    if (dyn_cast<RankedTensorType>(retType)) {
+    if (dyn_cast<RankedTensorType>(retShapedType)) {
       assert(value);
       if (value.getElementType().isInteger(1) && value.isSplat())
         // Workaround until https://reviews.llvm.org/D133743 is included.
-        value = DenseElementsAttr::get(retType, value.getSplatValue<bool>());
+        value =
+            DenseElementsAttr::get(retShapedType, value.getSplatValue<bool>());
       else
         // This is a hack. We just want to add encoding
-        value = value.reshape(retType);
+        value = value.reshape(retShapedType);
     }
-    addNamedAttrs(
-        rewriter.replaceOpWithNewOp<arith::ConstantOp>(op, retType, value),
-        adaptor.getAttributes());
+    addNamedAttrs(rewriter.replaceOpWithNewOp<arith::ConstantOp>(
+                      op, retShapedType, value),
+                  adaptor.getAttributes());
     return success();
   }
 };
@@ -252,15 +254,17 @@ struct TritonDotPattern : public OpConversionPattern<triton::DotOp> {
     auto origShape = origType.getShape();
     auto typeConverter = getTypeConverter<TritonGPUTypeConverter>();
     int numWarps = typeConverter->getNumWarps();
+    int threadsPerWarp = typeConverter->getThreadsPerWarp();
 
     SmallVector<unsigned> retSizePerThread = {1, 1};
-    if (origShape[0] * origShape[1] / (numWarps * 32) >= 4)
+    if (origShape[0] * origShape[1] / (numWarps * threadsPerWarp) >= 4)
       retSizePerThread = {2, 2};
-    if (origShape[0] * origShape[1] / (numWarps * 32) >= 16)
+    if (origShape[0] * origShape[1] / (numWarps * threadsPerWarp) >= 16)
       retSizePerThread = {4, 4};
     SmallVector<unsigned> retOrder = {1, 0};
     Attribute dEncoding = triton::gpu::BlockedEncodingAttr::get(
-        getContext(), origShape, retSizePerThread, retOrder, numWarps);
+        getContext(), origShape, retSizePerThread, retOrder, numWarps,
+        threadsPerWarp);
     RankedTensorType retType =
         RankedTensorType::get(origShape, origType.getElementType(), dEncoding);
     // a & b must be of smem layout
@@ -554,7 +558,6 @@ public:
   LogicalResult
   matchAndRewrite(triton::CallOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto converter = getTypeConverter();
     auto newOp = rewriter.replaceOpWithNewOp<triton::CallOp>(
         op, op.getCallee(), op.getResultTypes(), adaptor.getOperands());
     addNamedAttrs(newOp, adaptor.getAttributes());
@@ -569,9 +572,7 @@ public:
   LogicalResult
   matchAndRewrite(ReturnOp op, ReturnOp::Adaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    auto converter = getTypeConverter();
-    auto newOp =
-        rewriter.replaceOpWithNewOp<ReturnOp>(op, adaptor.getOperands());
+    rewriter.replaceOpWithNewOp<ReturnOp>(op, adaptor.getOperands());
     return success();
   }
 };
@@ -791,7 +792,6 @@ public:
     if (failed(rewriter.convertRegionTypes(newOp.getFalseDest()->getParent(),
                                            *converter)))
       return failure();
-    rewriter.eraseOp(op);
     return success();
   }
 };
@@ -808,13 +808,16 @@ class ConvertTritonToTritonGPU
 public:
   ConvertTritonToTritonGPU() = default;
   // constructor with some parameters set explicitly.
-  ConvertTritonToTritonGPU(int numWarps) { this->numWarps = numWarps; }
+  ConvertTritonToTritonGPU(int numWarps, int threadsPerWarp) {
+    this->numWarps = numWarps;
+    this->threadsPerWarp = threadsPerWarp;
+  }
 
   void runOnOperation() override {
     MLIRContext *context = &getContext();
     ModuleOp mod = getOperation();
     // type converter
-    TritonGPUTypeConverter typeConverter(context, numWarps);
+    TritonGPUTypeConverter typeConverter(context, numWarps, threadsPerWarp);
     TritonGPUConversionTarget target(*context, typeConverter);
     // rewrite patterns
     RewritePatternSet patterns(context);
@@ -837,6 +840,9 @@ public:
     mod->setAttr(
         AttrNumWarpsName,
         IntegerAttr::get(i32_ty, llvm::APInt(32, numWarps.getValue())));
+    mod->setAttr(
+        AttrNumThreadsPerWarp,
+        IntegerAttr::get(i32_ty, llvm::APInt(32, threadsPerWarp.getValue())));
 
     // update layouts
     //  broadcast src => multicast, dst => broadcasted
@@ -848,8 +854,9 @@ public:
 } // namespace
 
 std::unique_ptr<OperationPass<ModuleOp>>
-mlir::triton::createConvertTritonToTritonGPUPass(int numWarps) {
-  return std::make_unique<::ConvertTritonToTritonGPU>(numWarps);
+mlir::triton::createConvertTritonToTritonGPUPass(int numWarps,
+                                                 int threadsPerWarp) {
+  return std::make_unique<::ConvertTritonToTritonGPU>(numWarps, threadsPerWarp);
 }
 
 std::unique_ptr<OperationPass<ModuleOp>>
