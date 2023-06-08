@@ -93,6 +93,7 @@ jobs:
         if: ${{ env.BACKEND == 'XPU'}}
         run: |
           cd python
+
           python3 -m pip install --upgrade pip
           python3 -m pip install cmake==3.24
           source ${HOME}/miniconda3/bin/activate
