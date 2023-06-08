@@ -332,8 +332,8 @@ def {self.fn.__name__}({', '.join(self.arg_names)}, grid, num_warps=4, num_stage
     grid_2 = grid[2] if grid_size > 2 else 1
 
     device_types = [device_type for device_type in {device_types} if device_type != '']
-    device_type = self._conclude_device_type(device_types, {pinned_memory_flags})
-    device_backend = None
+    device_type = self._conclude_device_type(device_types, {pinned_memory_flags}) if device is None else device
+    device_backend = device
     if device_type not in ['cuda', 'hip']:
         device_backend = get_backend(device_type)
         if device_backend is None:
